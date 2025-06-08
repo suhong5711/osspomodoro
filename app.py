@@ -69,7 +69,8 @@ def init_state():
         "time_left": 0,
         "set_index": 1,
         "cycle_type": "focus",
-        "start_requested": False
+        "start_requested": False,
+        "stop_flag": False
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -78,12 +79,12 @@ def init_state():
 init_state()
 
 st.sidebar.title("설정")
-focus_sec = st.sidebar.number_input("집중 시간 (초)", 10, 3600, 30)
-break_sec = st.sidebar.number_input("쉬는 시간 (초)", 10, 1800, 15)
+focus_sec = st.sidebar.number_input("지비중 시간 (초)", 10, 3600, 20)
+break_sec = st.sidebar.number_input("쉬는 시간 (초)", 10, 1800, 10)
 total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
-st.sidebar.text_area("📝 오늘 할 일 목록")
+st.sidebar.text_area("📜 오늘 할 일 목록")
 
-btn1, btn2, btn3 = st.columns([1, 1, 1])
+btn1, btn2, btn3, btn4 = st.columns([1, 1, 1, 1])
 with btn1:
     if st.button("▶ 시작"):
         st.session_state.running = True
@@ -92,6 +93,7 @@ with btn1:
         st.session_state.cycle_type = "focus"
         st.session_state.time_left = focus_sec
         st.session_state.start_requested = True
+        st.session_state.stop_flag = False
 with btn2:
     if st.button("⏯ 정지/재시작"):
         if st.session_state.running:
@@ -106,7 +108,22 @@ with btn3:
         st.session_state.paused = False
         st.session_state.set_index = 1
         st.session_state.cycle_type = "focus"
-        st.session_state.time_left = 0
+        st.session_state.time_left = focus_sec
+        st.session_state.stop_flag = False
+with btn4:
+    if st.button("⏹ 중지/재시작"):
+        if not st.session_state.stop_flag:
+            st.session_state.running = False
+            st.session_state.paused = False
+            if st.session_state.cycle_type == "focus":
+                st.session_state.time_left = focus_sec
+            else:
+                st.session_state.time_left = break_sec
+            st.session_state.stop_flag = True
+        else:
+            st.session_state.running = True
+            st.session_state.paused = False
+            st.session_state.stop_flag = False
 
 colL, colR = st.columns([1, 3])
 status_placeholder = st.empty()
@@ -117,7 +134,7 @@ with colR:
     container_video = st.empty()
     status_text = st.empty()
 
-if st.session_state.cap is None:
+if st.session_state.running and st.session_state.cap is None:
     st.session_state.cap = cv2.VideoCapture(0)
 
 def show_frame():
@@ -150,7 +167,7 @@ def run_timer(duration):
         st.session_state.time_left = int(end_time - time.time())
         update_timer_ui(duration)
         show_frame()
-        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('집중중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
+        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('집중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
         status_text.subheader(status)
         time.sleep(0.1)
 
@@ -179,7 +196,7 @@ if st.session_state.running:
     run_timer_cycle()
 else:
     update_timer_ui(focus_sec if st.session_state.cycle_type == "focus" else break_sec)
-    if st.session_state.paused:
-        container_video.markdown("⏸ 정지 상태입니다. 재시작을 누르면 다시 시작됩니다.")
-    else:
+    if st.session_state.running and not st.session_state.paused:
         show_frame()
+    elif st.session_state.paused:
+        container_video.markdown("⏸ 지금은 정지 상태입니다. 시작하려면 재시작을 누르세요.")
