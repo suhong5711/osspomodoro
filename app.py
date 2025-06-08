@@ -62,7 +62,9 @@ def init_state():
         "hand_time": 0,
         "phone_time": 0,
         "neutral_time": 0,
-        "completed": False
+        "completed": False,
+        "last_frame_time": None,
+        "startup_latency": 0
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -73,7 +75,7 @@ init_state()
 st.sidebar.title("설정")
 focus_sec = st.sidebar.number_input("지비중 시간 (초)", 10, 3600, 20)
 break_sec = st.sidebar.number_input("쉬는 시간 (초)", 1, 1800, 5)
-total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
+total_sets = st.sidebar.number_input("세트 수", 1, 10, 2)
 st.sidebar.text_area("📜 오늘 할 일 목록")
 
 btn1, btn2, btn3, btn4 = st.columns([1, 1, 1, 1])
@@ -91,6 +93,13 @@ with btn1:
         st.session_state.hand_time = 0
         st.session_state.phone_time = 0
         st.session_state.neutral_time = 0
+        st.session_state.last_frame_time = time.time()
+        cap_start = time.time()
+        st.session_state.cap = cv2.VideoCapture(0)
+        while not st.session_state.cap.isOpened():
+            pass
+        st.session_state.startup_latency = time.time() - cap_start
+
 with btn2:
     if st.button("⏯ 정지/재시작"):
         if st.session_state.running:
@@ -99,6 +108,7 @@ with btn2:
         elif st.session_state.paused and st.session_state.time_left > 0:
             st.session_state.running = True
             st.session_state.paused = False
+
 with btn3:
     if st.button("🔄 초기화"):
         st.session_state.running = False
@@ -108,6 +118,7 @@ with btn3:
         st.session_state.time_left = focus_sec
         st.session_state.stop_flag = False
         st.session_state.completed = False
+
 with btn4:
     if st.button("⏹ 중지/재시작"):
         if not st.session_state.stop_flag:
@@ -136,6 +147,11 @@ def show_frame():
     ret, frame = st.session_state.cap.read()
     if not ret:
         return
+
+    now = time.time()
+    delta = now - st.session_state.last_frame_time
+    st.session_state.last_frame_time = now
+
     results = model(frame, conf=CONFIDENCE_THRESHOLD, iou=IOU_THRESHOLD)[0]
     found = False
     for box in results.boxes:
@@ -144,14 +160,14 @@ def show_frame():
         xmin, ymin, xmax, ymax = map(int, box.xyxy[0].tolist())
         color = (255, 0, 0) if cls_name == 'hand_with_pen' else (0, 0, 255) if cls_name == 'smartphone' else (255, 255, 255)
         if cls_name == 'hand_with_pen':
-            st.session_state.hand_time += 0.1
+            st.session_state.hand_time += delta
         elif cls_name == 'smartphone':
-            st.session_state.phone_time += 0.1
+            st.session_state.phone_time += delta
         found = True
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
         cv2.putText(frame, cls_name, (xmin, max(0, ymin - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     if not found:
-        st.session_state.neutral_time += 0.1
+        st.session_state.neutral_time += delta
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     container_video.image(rgb, channels="RGB")
 
@@ -165,14 +181,15 @@ def run_timer(duration):
     while time.time() < end_time:
         if not st.session_state.running:
             update_timer_ui(duration)
-            time.sleep(0.1)
+            time.sleep(0.05)
             continue
         st.session_state.time_left = int(end_time - time.time())
         update_timer_ui(duration)
         show_frame()
         status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('지비중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
         status_text.subheader(status)
-        time.sleep(0.1)
+        loop_time = 0.1
+        time.sleep(loop_time)
 
 def run_timer_cycle():
     while st.session_state.running and st.session_state.set_index <= total_sets:
@@ -210,13 +227,20 @@ else:
         container_video.markdown("⏹ 지금은 중지 상태입니다. 세트를 시작하려면 중지/재시작을 누르세요.")
 
 if st.session_state.completed:
-    elapsed = int(time.time() - st.session_state.start_time)
-    m, s = divmod(elapsed, 60)
+    detect_total = st.session_state.hand_time + st.session_state.phone_time + st.session_state.neutral_time
+    adjusted_detect_total = detect_total - st.session_state.startup_latency
+    expected_total = total_sets * (focus_sec + break_sec)
+    adjusted_neutral = st.session_state.neutral_time - st.session_state.startup_latency
+    err_time = expected_total - adjusted_detect_total
+    m, s = divmod(int(expected_total), 60)
     st.markdown("### 🏁 결과 요약")
     st.table({
-        "항목": ["총 소요 시간", "세트 수", "펜 인식 시간", "휴대폰 인식 시간", "미탐지 시간"],
-        "값": [f"{m:02d}:{s:02d}", total_sets,
+        "항목": ["총 타이머 시간", "펜 인식 시간", "휴대폰 인식 시간", "미탐지 시간 (보정)", "세트 수", "오차 시간", "탐지 시간 합계 (보정)"],
+        "값": [f"{m:02d}:{s:02d}",
               f"{st.session_state.hand_time:.1f}s",
               f"{st.session_state.phone_time:.1f}s",
-              f"{st.session_state.neutral_time:.1f}s"]
+              f"{adjusted_neutral:.1f}s",
+              total_sets,
+              f"{err_time:.1f}s",
+              f"{adjusted_detect_total:.1f}s"]
     })
