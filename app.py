@@ -1,4 +1,3 @@
-
 import streamlit as st
 import streamlit.components.v1 as components
 import time
@@ -17,7 +16,7 @@ model = YOLO(MODEL_PATH)
 CONFIDENCE_THRESHOLD = 0.4
 IOU_THRESHOLD = 0.6
 
-TIMER_CSS = """<style>
+TIMER_CSS_RED = """<style>
 .circle {
   width: 100px;
   height: 100px;
@@ -32,14 +31,31 @@ TIMER_CSS = """<style>
 }
 </style>"""
 
-def draw_circle(remaining, total):
+TIMER_CSS_BLUE = """<style>
+.circle {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.circle span {
+  font: 600 1.2rem monospace;
+  color: #fff;
+}
+</style>"""
+
+def draw_circle(remaining, total, color="red"):
     pct = remaining / total if total else 0
     angle = pct * 360
     mm, ss = divmod(remaining, 60)
-    html = TIMER_CSS + f"""
+    css = TIMER_CSS_RED if color == "red" else TIMER_CSS_BLUE
+    grad_color = "#e74c3c" if color == "red" else "#3498db"
+    html = css + f"""
     <div class='circle'
          style='background:
-            conic-gradient(#e74c3c 0deg {angle}deg,
+            conic-gradient({grad_color} 0deg {angle}deg,
                            #eeeeee {angle}deg 360deg);'>
       <span>{mm:02d}:{ss:02d}</span>
     </div>"""
@@ -65,6 +81,8 @@ st.sidebar.title("설정")
 focus_min = st.sidebar.number_input("집중 시간 (분)", 1, 60, 25)
 break_min = st.sidebar.number_input("쉬는 시간 (분)", 1, 30, 5)
 total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
+st.sidebar.text_area("📝 오늘 할 일 목록")
+
 focus_sec = focus_min * 60
 break_sec = break_min * 60
 
@@ -122,8 +140,9 @@ def show_frame():
     container_video.image(rgb, channels="RGB")
 
 def update_timer_ui(duration):
+    color = "blue" if st.session_state.cycle_type == "break" else "red"
     with container_timer:
-        components.html(draw_circle(st.session_state.time_left, duration), height=120)
+        components.html(draw_circle(st.session_state.time_left, duration, color), height=120)
 
 def run_timer(duration):
     end_time = time.time() + st.session_state.time_left
@@ -135,13 +154,18 @@ def run_timer(duration):
         st.session_state.time_left = int(end_time - time.time())
         update_timer_ui(duration)
         show_frame()
-        status_text.subheader(f"{total_sets}세트 중 {st.session_state.set_index}세트 진행중")
+        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('집중중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
+        status_text.subheader(status)
         time.sleep(0.1)
 
-if st.session_state.running:
-    duration = focus_sec if st.session_state.cycle_type == "focus" else break_sec
-    run_timer(duration)
-    if not st.session_state.paused:
+def run_timer_cycle():
+    while st.session_state.running and st.session_state.set_index <= total_sets:
+        duration = focus_sec if st.session_state.cycle_type == "focus" else break_sec
+        run_timer(duration)
+
+        if not st.session_state.running or st.session_state.paused:
+            break
+
         if st.session_state.cycle_type == "focus":
             st.session_state.cycle_type = "break"
             st.session_state.time_left = break_sec
@@ -150,14 +174,16 @@ if st.session_state.running:
             if st.session_state.set_index > total_sets:
                 st.session_state.running = False
                 status_placeholder.success("🎉 모든 세트 완료!")
+                break
             else:
                 st.session_state.cycle_type = "focus"
                 st.session_state.time_left = focus_sec
+
+if st.session_state.running:
+    run_timer_cycle()
 else:
     update_timer_ui(focus_sec if st.session_state.cycle_type == "focus" else break_sec)
     if st.session_state.paused:
         container_video.markdown("⏸ 정지 상태입니다. 재시작을 누르면 다시 시작됩니다.")
     else:
         show_frame()
-
-
