@@ -1,70 +1,222 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import time
+import cv2
+import pathlib
+import numpy as np
+import sys
+from datetime import datetime
+from ultralytics import YOLO
 
-TIMER_CSS = """
-<style>
-.circle{
-  width:240px;height:240px;border-radius:50%;
-  display:flex;align-items:center;justify-content:center;margin:auto;}
-.circle span{font:700 2.2rem monospace;color:#fff}
+if sys.platform == 'win32':
+    pathlib.PosixPath = pathlib.WindowsPath
+
+MODEL_PATH = 'C:/Users/LG/OneDrive/Documents/GitHub/software-os/opensw/opensw/openswbest3.pt'
+model = YOLO(MODEL_PATH)
+CONFIDENCE_THRESHOLD = 0.4
+IOU_THRESHOLD = 0.6
+
+TIMER_CSS_RED = """<style>
+.circle {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.circle span {
+  font: 600 1.2rem monospace;
+  color: #fff;
+}
 </style>"""
 
-def draw_circle(remaining, total):
-    pct = remaining / total                 
-    angle = pct * 360                       
-    mm, ss = divmod(remaining, 60)
-    timer = f"{mm:02d}:{ss:02d}"
+TIMER_CSS_BLUE = TIMER_CSS_RED
 
-    html = TIMER_CSS+f"""
-    <div class="circle"
-         style="background:
-            conic-gradient(#e74c3c 0deg {angle}deg,
-                           #eeeeee {angle}deg 360deg);">
+def draw_circle(remaining, total, color="red"):
+    pct = remaining / total if total else 0
+    angle = pct * 360
+    mm, ss = divmod(remaining, 60)
+    css = TIMER_CSS_RED if color == "red" else TIMER_CSS_BLUE
+    grad_color = "#e74c3c" if color == "red" else "#3498db"
+    html = css + f"""
+    <div class='circle'
+         style='background:
+            conic-gradient({grad_color} 0deg {angle}deg,
+                           #eeeeee {angle}deg 360deg);'>
       <span>{mm:02d}:{ss:02d}</span>
     </div>"""
     return html
 
+def init_state():
+    defaults = {
+        "cap": None,
+        "running": False,
+        "paused": False,
+        "time_left": 0,
+        "set_index": 1,
+        "cycle_type": "focus",
+        "start_requested": False,
+        "stop_flag": False,
+        "start_time": None,
+        "hand_time": 0,
+        "phone_time": 0,
+        "neutral_time": 0,
+        "completed": False
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+init_state()
 
-local_css("style.css")
+st.sidebar.title("설정")
+focus_sec = st.sidebar.number_input("지비중 시간 (초)", 10, 3600, 20)
+break_sec = st.sidebar.number_input("쉬는 시간 (초)", 1, 1800, 5)
+total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
+st.sidebar.text_area("📜 오늘 할 일 목록")
 
-#---------------------------------#
-st.write("""
-# The Pomodoro App
+btn1, btn2, btn3, btn4 = st.columns([1, 1, 1, 1])
+with btn1:
+    if st.button("▶ 시작"):
+        st.session_state.running = True
+        st.session_state.paused = False
+        st.session_state.set_index = 1
+        st.session_state.cycle_type = "focus"
+        st.session_state.time_left = focus_sec
+        st.session_state.start_requested = True
+        st.session_state.stop_flag = False
+        st.session_state.completed = False
+        st.session_state.start_time = time.time()
+        st.session_state.hand_time = 0
+        st.session_state.phone_time = 0
+        st.session_state.neutral_time = 0
+with btn2:
+    if st.button("⏯ 정지/재시작"):
+        if st.session_state.running:
+            st.session_state.running = False
+            st.session_state.paused = True
+        elif st.session_state.paused and st.session_state.time_left > 0:
+            st.session_state.running = True
+            st.session_state.paused = False
+with btn3:
+    if st.button("🔄 초기화"):
+        st.session_state.running = False
+        st.session_state.paused = False
+        st.session_state.set_index = 1
+        st.session_state.cycle_type = "focus"
+        st.session_state.time_left = focus_sec
+        st.session_state.stop_flag = False
+        st.session_state.completed = False
+with btn4:
+    if st.button("⏹ 중지/재시작"):
+        if not st.session_state.stop_flag:
+            st.session_state.running = False
+            st.session_state.paused = False
+            if st.session_state.cycle_type == "focus":
+                st.session_state.time_left = focus_sec
+            else:
+                st.session_state.time_left = break_sec
+            st.session_state.stop_flag = True
+        else:
+            st.session_state.running = True
+            st.session_state.paused = False
+            st.session_state.stop_flag = False
 
-Let's do some focus work in data science with this app.
+colL, colR = st.columns([1, 3])
+status_placeholder = st.empty()
+with colL:
+    st.markdown("### 🔵 타이머")
+    container_timer = st.empty()
+with colR:
+    container_video = st.empty()
+    status_text = st.empty()
 
-Developed by: [Data Professor](http://youtube.com/dataprofessor)
-Modified by: Donghyeon Ko
+def show_frame():
+    ret, frame = st.session_state.cap.read()
+    if not ret:
+        return
+    results = model(frame, conf=CONFIDENCE_THRESHOLD, iou=IOU_THRESHOLD)[0]
+    found = False
+    for box in results.boxes:
+        cls_id = int(box.cls.item())
+        cls_name = model.names[cls_id]
+        xmin, ymin, xmax, ymax = map(int, box.xyxy[0].tolist())
+        color = (255, 0, 0) if cls_name == 'hand_with_pen' else (0, 0, 255) if cls_name == 'smartphone' else (255, 255, 255)
+        if cls_name == 'hand_with_pen':
+            st.session_state.hand_time += 0.1
+        elif cls_name == 'smartphone':
+            st.session_state.phone_time += 0.1
+        found = True
+        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
+        cv2.putText(frame, cls_name, (xmin, max(0, ymin - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    if not found:
+        st.session_state.neutral_time += 0.1
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    container_video.image(rgb, channels="RGB")
 
+def update_timer_ui(duration):
+    color = "blue" if st.session_state.cycle_type == "break" else "red"
+    with container_timer:
+        components.html(draw_circle(st.session_state.time_left, duration, color), height=120)
 
-""")
+def run_timer(duration):
+    end_time = time.time() + st.session_state.time_left
+    while time.time() < end_time:
+        if not st.session_state.running:
+            update_timer_ui(duration)
+            time.sleep(0.1)
+            continue
+        st.session_state.time_left = int(end_time - time.time())
+        update_timer_ui(duration)
+        show_frame()
+        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('지비중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
+        status_text.subheader(status)
+        time.sleep(0.1)
 
-# Timer
-st.sidebar.title("Settings")
-focus_min = st.sidebar.number_input("Focus Time (minutes)", 5, 60, 25)
-break_min = st.sidebar.number_input("Break Time (minutes)", 1, 30, 5)
+def run_timer_cycle():
+    while st.session_state.running and st.session_state.set_index <= total_sets:
+        duration = focus_sec if st.session_state.cycle_type == "focus" else break_sec
+        run_timer(duration)
 
+        if not st.session_state.running or st.session_state.paused:
+            break
 
-button_clicked = st.button("Start")
+        if st.session_state.cycle_type == "focus":
+            st.session_state.cycle_type = "break"
+            st.session_state.time_left = break_sec
+        else:
+            st.session_state.set_index += 1
+            if st.session_state.set_index > total_sets:
+                st.session_state.running = False
+                st.session_state.completed = True
+                status_placeholder.success("🎉 모든 세트 완료!")
+                break
+            else:
+                st.session_state.cycle_type = "focus"
+                st.session_state.time_left = focus_sec
 
-t1 = focus_min * 60
-t2 = break_min * 60
+if st.session_state.running:
+    if st.session_state.cap is None:
+        st.session_state.cap = cv2.VideoCapture(0)
+    run_timer_cycle()
+else:
+    update_timer_ui(focus_sec if st.session_state.cycle_type == "focus" else break_sec)
+    if st.session_state.running and not st.session_state.paused:
+        show_frame()
+    elif st.session_state.paused:
+        container_video.markdown("⏸ 지금은 정지 상태입니다. 시작하려면 재시작을 누르세요.")
+    elif st.session_state.stop_flag:
+        container_video.markdown("⏹ 지금은 중지 상태입니다. 세트를 시작하려면 중지/재시작을 누르세요.")
 
-if button_clicked:
-    container=st.empty()
-    for t in range(t1, -1,-1):
-        with container:
-            components.html(draw_circle(t, t1), height=260, scrolling=False)
-        time.sleep(1)
-    st.toast("🔔 Focus complete! Time for a break.", icon="🍅")
-
-    for t in range(t2, -1, -1):
-        with container:
-            components.html(draw_circle(t, t2), height=260, scrolling=False)
-        time.sleep(1)
-    st.toast("⏰ Break is over!", icon="⏰")
+if st.session_state.completed:
+    elapsed = int(time.time() - st.session_state.start_time)
+    m, s = divmod(elapsed, 60)
+    st.markdown("### 🏁 결과 요약")
+    st.table({
+        "항목": ["총 소요 시간", "세트 수", "펜 인식 시간", "휴대폰 인식 시간", "미탐지 시간"],
+        "값": [f"{m:02d}:{s:02d}", total_sets,
+              f"{st.session_state.hand_time:.1f}s",
+              f"{st.session_state.phone_time:.1f}s",
+              f"{st.session_state.neutral_time:.1f}s"]
+    })
