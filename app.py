@@ -1,3 +1,4 @@
+
 import streamlit as st
 import streamlit.components.v1 as components
 import time
@@ -11,13 +12,14 @@ from ultralytics import YOLO
 if sys.platform == 'win32':
     pathlib.PosixPath = pathlib.WindowsPath
 
-MODEL_PATH = r'C:\Users\user\Desktop\opensw\opensw\openswbest3.pt'
+MODEL_PATH = 'C:/Users/LG/OneDrive/Documents/GitHub/software-os/opensw/opensw/openswbest3.pt'
 model = YOLO(MODEL_PATH)
 CONFIDENCE_THRESHOLD = 0.4
 IOU_THRESHOLD = 0.6
 
 TIMER_CSS = """<style>
 .circle {
+  width: 100px;
   height: 100px;
   border-radius: 50%;
   display: flex;
@@ -157,3 +159,5 @@ else:
         container_video.markdown("⏸ 정지 상태입니다. 재시작을 누르면 다시 시작됩니다.")
     else:
         show_frame()
+
+
