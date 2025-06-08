@@ -31,20 +31,7 @@ TIMER_CSS_RED = """<style>
 }
 </style>"""
 
-TIMER_CSS_BLUE = """<style>
-.circle {
-  width: 100px;
-  height: 100px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.circle span {
-  font: 600 1.2rem monospace;
-  color: #fff;
-}
-</style>"""
+TIMER_CSS_BLUE = TIMER_CSS_RED
 
 def draw_circle(remaining, total, color="red"):
     pct = remaining / total if total else 0
@@ -70,7 +57,12 @@ def init_state():
         "set_index": 1,
         "cycle_type": "focus",
         "start_requested": False,
-        "stop_flag": False
+        "stop_flag": False,
+        "start_time": None,
+        "hand_time": 0,
+        "phone_time": 0,
+        "neutral_time": 0,
+        "completed": False
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -80,7 +72,7 @@ init_state()
 
 st.sidebar.title("설정")
 focus_sec = st.sidebar.number_input("지비중 시간 (초)", 10, 3600, 20)
-break_sec = st.sidebar.number_input("쉬는 시간 (초)", 10, 1800, 10)
+break_sec = st.sidebar.number_input("쉬는 시간 (초)", 1, 1800, 5)
 total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
 st.sidebar.text_area("📜 오늘 할 일 목록")
 
@@ -94,6 +86,11 @@ with btn1:
         st.session_state.time_left = focus_sec
         st.session_state.start_requested = True
         st.session_state.stop_flag = False
+        st.session_state.completed = False
+        st.session_state.start_time = time.time()
+        st.session_state.hand_time = 0
+        st.session_state.phone_time = 0
+        st.session_state.neutral_time = 0
 with btn2:
     if st.button("⏯ 정지/재시작"):
         if st.session_state.running:
@@ -110,6 +107,7 @@ with btn3:
         st.session_state.cycle_type = "focus"
         st.session_state.time_left = focus_sec
         st.session_state.stop_flag = False
+        st.session_state.completed = False
 with btn4:
     if st.button("⏹ 중지/재시작"):
         if not st.session_state.stop_flag:
@@ -134,21 +132,26 @@ with colR:
     container_video = st.empty()
     status_text = st.empty()
 
-if st.session_state.running and st.session_state.cap is None:
-    st.session_state.cap = cv2.VideoCapture(0)
-
 def show_frame():
     ret, frame = st.session_state.cap.read()
     if not ret:
         return
     results = model(frame, conf=CONFIDENCE_THRESHOLD, iou=IOU_THRESHOLD)[0]
+    found = False
     for box in results.boxes:
         cls_id = int(box.cls.item())
         cls_name = model.names[cls_id]
         xmin, ymin, xmax, ymax = map(int, box.xyxy[0].tolist())
         color = (255, 0, 0) if cls_name == 'hand_with_pen' else (0, 0, 255) if cls_name == 'smartphone' else (255, 255, 255)
+        if cls_name == 'hand_with_pen':
+            st.session_state.hand_time += 0.1
+        elif cls_name == 'smartphone':
+            st.session_state.phone_time += 0.1
+        found = True
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
         cv2.putText(frame, cls_name, (xmin, max(0, ymin - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    if not found:
+        st.session_state.neutral_time += 0.1
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     container_video.image(rgb, channels="RGB")
 
@@ -167,7 +170,7 @@ def run_timer(duration):
         st.session_state.time_left = int(end_time - time.time())
         update_timer_ui(duration)
         show_frame()
-        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('집중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
+        status = f"{total_sets}세트 중 {st.session_state.set_index}세트 {('지비중' if st.session_state.cycle_type == 'focus' else '휴식중')}"
         status_text.subheader(status)
         time.sleep(0.1)
 
@@ -186,6 +189,7 @@ def run_timer_cycle():
             st.session_state.set_index += 1
             if st.session_state.set_index > total_sets:
                 st.session_state.running = False
+                st.session_state.completed = True
                 status_placeholder.success("🎉 모든 세트 완료!")
                 break
             else:
@@ -193,6 +197,8 @@ def run_timer_cycle():
                 st.session_state.time_left = focus_sec
 
 if st.session_state.running:
+    if st.session_state.cap is None:
+        st.session_state.cap = cv2.VideoCapture(0)
     run_timer_cycle()
 else:
     update_timer_ui(focus_sec if st.session_state.cycle_type == "focus" else break_sec)
@@ -200,3 +206,17 @@ else:
         show_frame()
     elif st.session_state.paused:
         container_video.markdown("⏸ 지금은 정지 상태입니다. 시작하려면 재시작을 누르세요.")
+    elif st.session_state.stop_flag:
+        container_video.markdown("⏹ 지금은 중지 상태입니다. 세트를 시작하려면 중지/재시작을 누르세요.")
+
+if st.session_state.completed:
+    elapsed = int(time.time() - st.session_state.start_time)
+    m, s = divmod(elapsed, 60)
+    st.markdown("### 🏁 결과 요약")
+    st.table({
+        "항목": ["총 소요 시간", "세트 수", "펜 인식 시간", "휴대폰 인식 시간", "미탐지 시간"],
+        "값": [f"{m:02d}:{s:02d}", total_sets,
+              f"{st.session_state.hand_time:.1f}s",
+              f"{st.session_state.phone_time:.1f}s",
+              f"{st.session_state.neutral_time:.1f}s"]
+    })
