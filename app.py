@@ -78,15 +78,12 @@ def init_state():
 init_state()
 
 st.sidebar.title("설정")
-focus_min = st.sidebar.number_input("집중 시간 (분)", 1, 60, 25)
-break_min = st.sidebar.number_input("쉬는 시간 (분)", 1, 30, 5)
+focus_sec = st.sidebar.number_input("집중 시간 (초)", 10, 3600, 30)
+break_sec = st.sidebar.number_input("쉬는 시간 (초)", 10, 1800, 15)
 total_sets = st.sidebar.number_input("세트 수", 1, 10, 3)
 st.sidebar.text_area("📝 오늘 할 일 목록")
 
-focus_sec = focus_min * 60
-break_sec = break_min * 60
-
-btn1, btn2, btn3, btn4 = st.columns([1, 1, 1, 1])
+btn1, btn2, btn3 = st.columns([1, 1, 1])
 with btn1:
     if st.button("▶ 시작"):
         st.session_state.running = True
@@ -96,9 +93,13 @@ with btn1:
         st.session_state.time_left = focus_sec
         st.session_state.start_requested = True
 with btn2:
-    if st.button("⏸ 정지"):
-        st.session_state.running = False
-        st.session_state.paused = True
+    if st.button("⏯ 정지/재시작"):
+        if st.session_state.running:
+            st.session_state.running = False
+            st.session_state.paused = True
+        elif st.session_state.paused and st.session_state.time_left > 0:
+            st.session_state.running = True
+            st.session_state.paused = False
 with btn3:
     if st.button("🔄 초기화"):
         st.session_state.running = False
@@ -106,11 +107,6 @@ with btn3:
         st.session_state.set_index = 1
         st.session_state.cycle_type = "focus"
         st.session_state.time_left = 0
-with btn4:
-    if st.button("🔁 재시작"):
-        if st.session_state.paused and st.session_state.time_left > 0:
-            st.session_state.running = True
-            st.session_state.paused = False
 
 colL, colR = st.columns([1, 3])
 status_placeholder = st.empty()
